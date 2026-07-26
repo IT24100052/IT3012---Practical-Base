@@ -1,7 +1,5 @@
 # grid_game.py
 import random
-
-
 class GridHuntGame:
     """A small Pacman-style grid environment (4x4) where an agent collects food."""
 
@@ -11,8 +9,9 @@ class GridHuntGame:
         self.agent_pos = [0, 0]  # Starting position (x, y)
 
         # Place a few random food pellets and obstacles (walls)
-        self.food_positions = {[1, 2], [2, 3], [3, 0], [2, 1]}
-        self.walls = {[1, 1], [2, 2]}
+        self.food_positions = {(1, 2), (2, 3), (3, 0), (2, 1)}
+        self.walls = {(1, 1), (2, 2)}
+        self.toxic_traps = {(0, 3), (3, 3)}
 
         self.score = 0
         self.steps = 0
@@ -22,6 +21,7 @@ class GridHuntGame:
             'agent_pos': list(self.agent_pos),
             'smells_food': tuple(self.agent_pos) in self.food_positions,
             'hit_wall': tuple(self.agent_pos) in self.walls,
+            'smells_toxin': tuple(self.agent_pos) in self.toxic_traps,
             'score': self.score,
             'remaining_food': len(self.food_positions)
         }
@@ -50,6 +50,9 @@ class GridHuntGame:
         if tuple_pos in self.food_positions:
             self.food_positions.remove(tuple_pos)
             self.score += 20  # Reward for eating food pellet
+        # Check if agent steps on toxic trap
+        if tuple_pos in self.toxic_traps:
+            self.score -= 15
 
     def is_done(self) -> bool:
         return len(self.food_positions) == 0 or self.steps >= 20
