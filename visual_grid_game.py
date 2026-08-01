@@ -14,6 +14,7 @@ class VisualGridHuntGame:
         self.width = width
         self.height = height
         self.agent_pos = [0, 0]
+        self.facing = "Up"
 
         # Walls
         if custom_walls:
@@ -90,25 +91,52 @@ class VisualGridHuntGame:
         self.collision = False
 
 
+    # ------------------------------------------------------------------
+    # Helper: coordinates of the cell directly in front of the agent,
+    # based on self.facing. Returns None if that cell is off the grid
+    # (treated as blocked, just like a wall).
+    # ------------------------------------------------------------------
+    def _cell_in_front(self):
+
+        x, y = self.agent_pos
+
+        if self.facing == "Up":
+            y += 1
+        elif self.facing == "Down":
+            y -= 1
+        elif self.facing == "Left":
+            x -= 1
+        elif self.facing == "Right":
+            x += 1
+
+        if 0 <= x < self.width and 0 <= y < self.height:
+            return (x, y)
+
+        return None
+
 
     # Perception subsystem
     def get_percept(self):
 
+        front_cell = self._cell_in_front()
+        opponent_cells = [tuple(op) for op in self.opponents]
+
         return {
 
-            "agent_pos": list(self.agent_pos),
+            "facing":
+                self.facing,
 
-            "opponent_positions":
-                [list(op) for op in self.opponents],
+            "wall_ahead":
+                front_cell is None or front_cell in self.walls,
 
-            "smells_food":
+            "food_here":
                 tuple(self.agent_pos) in self.food_positions,
 
-            "hit_wall":
-                tuple(self.agent_pos) in self.walls,
-
-            "smells_toxin":
+            "toxin_here":
                 tuple(self.agent_pos) in self.toxic_traps,
+
+            "opponent_ahead":
+                front_cell is not None and front_cell in opponent_cells,
 
             "collision":
                 self.collision,
@@ -126,6 +154,38 @@ class VisualGridHuntGame:
     def execute_action(self, action):
 
         self.steps += 1
+
+        # Translate the agent's abstract actions into concrete moves.
+        if action == "turn_left":
+
+            turn_map = {
+                "Up": "Left",
+                "Left": "Down",
+                "Down": "Right",
+                "Right": "Up"
+            }
+            self.facing = turn_map[self.facing]
+
+            # Turning doesn't move the agent, so we stop here.
+            return
+
+        if action == "turn_right":
+
+            turn_map = {
+                "Up": "Right",
+                "Right": "Down",
+                "Down": "Left",
+                "Left": "Up"
+            }
+            self.facing = turn_map[self.facing]
+
+            return
+
+        if action == "move_forward":
+            action = self.facing
+
+        if action in ("Up", "Down", "Left", "Right"):
+            self.facing = action
 
         new_pos = list(self.agent_pos)
 
@@ -260,7 +320,110 @@ class VisualGridHuntGame:
         )
 
 
+class SimpleReflexAgent:
+    """
+    A Simple Reflex Agent: chooses an action using ONLY the current
+    percept, via strict IF-THEN condition-action rules. It has no
+    memory of past percepts or actions.
+    """
 
+    def sense_and_act(self, percept):
+
+        # Rule 1: food under my feet -> eat it by stepping onto it again
+        # (in this game, "eating" just means moving onto the food cell,
+        # so we treat this the same as moving forward)
+        if percept["food_here"]:
+            return "move_forward"
+
+        # Rule 2: wall directly ahead -> turn left instead of walking into it
+        if percept["wall_ahead"]:
+            return "turn_left"
+
+        # Rule 3 (default): nothing blocking me -> just keep moving forward
+        return "move_forward"
+
+
+class ModelBasedAgent:
+    """
+    A Model-Based Agent: keeps an internal model of the world (its
+    believed position and which cells it has already visited) and
+    uses that memory, together with the current percept, to decide
+    what to do. This lets it recognize when it's repeating itself.
+    """
+
+    # Direction you end up facing after a left turn, starting from
+    # each possible current facing. (Same rotation as the environment's
+    # turn_left logic.)
+    LEFT_OF = {
+        "Up": "Left",
+        "Left": "Down",
+        "Down": "Right",
+        "Right": "Up"
+    }
+
+    def __init__(self):
+
+        # Believed position, starting arbitrarily at (0, 0).
+        # This does NOT need to match the agent's real position on
+        # the map -- it's a relative internal model built purely by
+        # counting the agent's own moves.
+        self.believed_pos = (0, 0)
+
+        # Every cell (relative to believed_pos) the agent thinks
+        # it has already stood on.
+        self.visited_cells = {(0, 0)}
+
+        # What the agent did last turn, and which way it was facing
+        # when it did it -- needed to update believed_pos correctly.
+        self.last_action = None
+        self.last_facing = None
+
+    def _cell_in_direction(self, direction):
+
+        x, y = self.believed_pos
+
+        if direction == "Up":
+            y += 1
+        elif direction == "Down":
+            y -= 1
+        elif direction == "Left":
+            x -= 1
+        elif direction == "Right":
+            x += 1
+
+        return (x, y)
+
+    def sense_and_act(self, percept):
+
+        # --- Update internal model based on what happened last turn ---
+        if self.last_action == "move_forward":
+            self.believed_pos = self._cell_in_direction(self.last_facing)
+            self.visited_cells.add(self.believed_pos)
+
+        # --- Decide next action using percept + memory ---
+        if percept["food_here"]:
+            action = "move_forward"
+
+        elif percept["wall_ahead"]:
+
+            left_direction = self.LEFT_OF[percept["facing"]]
+            left_cell = self._cell_in_direction(left_direction)
+
+            if left_cell in self.visited_cells:
+                # I've already tried going left from here before --
+                # that's the loop. Break it by going right instead.
+                action = "turn_right"
+            else:
+                action = "turn_left"
+
+        else:
+            action = "move_forward"
+
+        # --- Remember what we're about to do, for next turn's update ---
+        self.last_action = action
+        self.last_facing = percept["facing"]
+
+        return action
 
 
 class GridGameGUI:
@@ -413,20 +576,14 @@ class GridGameGUI:
 
         self.button.config(state="disabled")
 
+        self.agent = ModelBasedAgent()
 
         def step():
 
             if not self.env.is_done():
 
-                action=random.choice(
-                    [
-                        "Up",
-                        "Down",
-                        "Left",
-                        "Right"
-                    ]
-                )
-
+                percept = self.env.get_percept()
+                action = self.agent.sense_and_act(percept)
 
                 self.env.execute_action(action)
 
